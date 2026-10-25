@@ -211,6 +211,8 @@ function Build-Catalog {
         if (-not ($raw | Where-Object { $_.Name -eq 'Off' })) {
             $offMode = $modes | Where-Object { $_.Color -and $_.Name -in 'Static', 'Direct' } | Select-Object -First 1
             if (-not $offMode) { $offMode = $modes | Where-Object { $_.Color -and -not $_.Speed } | Select-Object -First 1 }
+            # Effect-only devices: at least drop the brightness to 0.
+            if (-not $offMode) { $offMode = $modes | Where-Object { $_.Bright } | Select-Object -First 1 }
         }
 
         $sub = $name
@@ -400,14 +402,29 @@ function Find-OpenRgb {
         (Join-Path $env:LOCALAPPDATA 'Programs\OpenRGB\OpenRGB.exe')
         (Get-Command 'OpenRGB.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
     )
-    foreach ($c in $candidates) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
+    foreach ($c in $candidates) { if (Test-OpenRgbPath $c) { return $c } }
     return $null
+}
+
+# Only ever launch a file actually named OpenRGB.exe, even if the saved path was edited.
+function Test-OpenRgbPath {
+    param([string]$Path)
+    $Path -and (Split-Path -Leaf $Path) -eq 'OpenRGB.exe' -and (Test-Path -LiteralPath $Path -PathType Leaf)
+}
+
+# Quote one argument the way Windows programs parse their command line.
+function ConvertTo-CommandArgument {
+    param([string]$Value)
+    if ($Value -notmatch '[\s"]' -and $Value) { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
 }
 
 function Start-OpenRgb {
     param([string[]]$Arguments)
-    if (-not $script:OpenRgbPath -or -not (Test-Path -LiteralPath $script:OpenRgbPath)) { throw '找不到 OpenRGB.exe。' }
-    $line = ($Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    if (-not (Test-OpenRgbPath $script:OpenRgbPath)) { throw '找不到 OpenRGB.exe。' }
+    $line = ($Arguments | ForEach-Object { ConvertTo-CommandArgument $_ }) -join ' '
     Write-Log ('RUN ' + $line)
     $p = Start-Process -FilePath $script:OpenRgbPath -ArgumentList $line -WindowStyle Hidden -PassThru
     $null = $p.Handle   # keeps ExitCode readable after the process ends
@@ -429,10 +446,11 @@ function Get-DeviceArguments {
         elseif ($cat.OffMode) {
             # No Off mode: black, and brightness 0 where the mode has brightness.
             $m = $cat.OffMode
-            $tail = @('--mode', $m.Name, '--color', '000000') + $(if ($m.Bright) { @('--brightness', '0') } else { @() })
-            if (& $perZone $m) { foreach ($z in $cat.Zones) { $a.AddRange([string[]](@('--device', $cat.Target, '--zone', [string]$z.Index) + $tail)) } }
+            $tail = @('--mode', $m.Name) + $(if ($m.Color) { @('--color', '000000') } else { @() }) + $(if ($m.Bright) { @('--brightness', '0') } else { @() })
+            if ($m.Color -and (& $perZone $m)) { foreach ($z in $cat.Zones) { $a.AddRange([string[]](@('--device', $cat.Target, '--zone', [string]$z.Index) + $tail)) } }
             else { $a.AddRange([string[]](@('--device', $cat.Target) + $tail)) }
         }
+        else { Write-Log ('警告：{0} 沒有可用的關燈方式，略過。' -f $cat.Name) }
         return , $a.ToArray()
     }
 
@@ -1264,9 +1282,13 @@ $ui.SetupPrimary.Add_Click({
 })
 $ui.SetupSecondary.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'OpenRGB.exe|OpenRGB.exe|程式 (*.exe)|*.exe'
+    $dlg.Filter = 'OpenRGB.exe|OpenRGB.exe'
     $dlg.Title = '選擇 OpenRGB.exe'
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        if (-not (Test-OpenRgbPath $dlg.FileName)) {
+            [System.Windows.MessageBox]::Show('請選擇名稱為 OpenRGB.exe 的檔案。', 'RGB 光控中心') | Out-Null
+            return
+        }
         $script:OpenRgbPath = $dlg.FileName
         $script:State.OpenRgbPath = $dlg.FileName
         Save-State
@@ -1830,6 +1852,14 @@ $window.Add_Closing({
 })
 
 # ---------------------------------------------------------------- start
+
+# A bug in a click handler should show up in the status bar, not close the window.
+$window.Dispatcher.Add_UnhandledException({
+    param($sender, $e)
+    Write-Log ('ERROR 未預期的錯誤：' + $e.Exception.Message)
+    try { Set-Status 'error' ('發生錯誤：' + $e.Exception.Message) } catch { }
+    $e.Handled = $true
+})
 
 Set-WindowIcon
 if (-not $script:OpenRgbPath) {

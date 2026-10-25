@@ -17,3 +17,7 @@ RGB-Switch.ps1
 RGB-Wake.ps1
 RGB-WakeNative.ps1
 RGB-WakeZones.ps1
+
+# Local README preview
+_readme-preview.html
+.claude/
