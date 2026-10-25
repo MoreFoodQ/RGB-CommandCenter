@@ -1,0 +1,19 @@
+# Per-PC data written at runtime
+RGB-switch-state.json
+RGB-devices.json
+*.log
+*.orp
+
+# Local test output
+_center-test.*
+openrgb-list*.txt
+
+# Personal backups and older one-off scripts from before this project
+_backup-*/
+PawnIO_setup.exe
+RGB-Control.ps1
+RGB-OffZones.ps1
+RGB-Switch.ps1
+RGB-Wake.ps1
+RGB-WakeNative.ps1
+RGB-WakeZones.ps1
